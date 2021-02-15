@@ -16,8 +16,8 @@ namespace Oxide.Plugins
 
         private const string SpherePrefab = "assets/prefabs/visualization/sphere.prefab";
         private const string SearchLightPrefab = "assets/prefabs/deployable/search light/searchlight.deployed.prefab";
-        private const string LightDeployEffectPrefab = "assets/prefabs/deployable/search light/effects/search-light-deploy.prefab";
 
+        private static readonly Vector3 SphereEntityInitialLocalPosition = new Vector3(0, -500, 0);
         private static readonly Vector3 SphereEntityLocalPosition = new Vector3(0, 0.075f, 0.25f);
         private static readonly Vector3 SearchLightLocalPosition = new Vector3(0, -1.25f, -0.25f);
         private static readonly Quaternion SearchLightLocalRotation = Quaternion.Euler(0, 180, 0);
@@ -183,11 +183,12 @@ namespace Oxide.Plugins
             if (DeployLightWasBlocked(drone))
                 return null;
 
-            SphereEntity sphereEntity = GameManager.server.CreateEntity(SpherePrefab, SphereEntityLocalPosition) as SphereEntity;
+            // Spawn the search light below the map initially while the resize is performed.
+            SphereEntity sphereEntity = GameManager.server.CreateEntity(SpherePrefab, SphereEntityInitialLocalPosition) as SphereEntity;
             if (sphereEntity == null)
                 return null;
 
-            // This fixes the issue where leaving the area and returning would not recreate the sphere and its children.
+            // Fix the issue where leaving the area and returning would not recreate the sphere and its children on clients.
             sphereEntity.globalBroadcast = false;
 
             sphereEntity.currentRadius = 0.1f;
@@ -204,9 +205,13 @@ namespace Oxide.Plugins
 
             searchLight.SetParent(sphereEntity);
             searchLight.Spawn();
-
-            Effect.server.Run(LightDeployEffectPrefab, searchLight.transform.position);
             Interface.CallHook("OnDroneSearchLightDeployed", drone, searchLight);
+
+            timer.Once(3, () =>
+            {
+                if (sphereEntity != null)
+                    sphereEntity.transform.localPosition = SphereEntityLocalPosition;
+            });
 
             return searchLight;
         }
