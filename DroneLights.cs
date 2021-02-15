@@ -18,7 +18,7 @@ namespace Oxide.Plugins
         private const string SearchLightPrefab = "assets/prefabs/deployable/search light/searchlight.deployed.prefab";
 
         private static readonly Vector3 SphereEntityInitialLocalPosition = new Vector3(0, -500, 0);
-        private static readonly Vector3 SphereEntityLocalPosition = new Vector3(0, 0.075f, 0.25f);
+        private static readonly Vector3 SphereEntityLocalPosition = new Vector3(0, -0.075f, 0.25f);
         private static readonly Vector3 SearchLightLocalPosition = new Vector3(0, -1.25f, -0.25f);
         private static readonly Quaternion SearchLightLocalRotation = Quaternion.Euler(0, 180, 0);
 
