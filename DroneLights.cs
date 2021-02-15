@@ -1,5 +1,6 @@
 ﻿using Oxide.Core;
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Oxide.Plugins
@@ -21,11 +22,13 @@ namespace Oxide.Plugins
         private static readonly Vector3 SphereEntityLocalPosition = new Vector3(0, -0.075f, 0.25f);
         private static readonly Vector3 SearchLightLocalPosition = new Vector3(0, -1.25f, -0.25f);
         private static readonly Quaternion SearchLightLocalRotation = Quaternion.Euler(0, 180, 0);
+        private static readonly Vector3 SearchLightDefaultAimDir = new Vector3(0, -0.2f, 0);
 
         private const float VerticalAimSensitivity = 15f;
         private const float MinVerticalAngle = -0.5f;
         private const float MaxVerticalAngle = 0.5f;
 
+        private readonly Dictionary<uint, Vector3> _savedAimDirs = new Dictionary<uint, Vector3>();
         private ProtectionProperties ImmortalProtection;
 
         #endregion
@@ -71,6 +74,14 @@ namespace Oxide.Plugins
             MaybeAutoDeploySearchLight(drone);
         }
 
+        private void OnEntityKill(Drone drone)
+        {
+            if (!IsDroneEligible(drone))
+                return;
+
+            _savedAimDirs.Remove(drone.net.ID);
+        }
+
         private void OnBookmarkInput(ComputerStation station, BasePlayer player, InputState inputState)
         {
             var drone = GetControlledDrone(station);
@@ -113,8 +124,18 @@ namespace Oxide.Plugins
             if (searchLight == null)
                 return null;
 
-            var isOn = searchLight.HasFlag(IOEntity.Flag_HasPower);
-            searchLight.SetFlag(IOEntity.Flag_HasPower, !isOn);
+            var wasOn = searchLight.HasFlag(IOEntity.Flag_HasPower);
+            searchLight.SetFlag(IOEntity.Flag_HasPower, !wasOn, networkupdate: false);
+
+            if (wasOn)
+            {
+                _savedAimDirs[drone.net.ID] = searchLight.aimDir;
+                searchLight.ResetState();
+            }
+            else
+                searchLight.aimDir = drone.transform.TransformDirection(GetInitialAimDir(drone.net.ID));
+
+            searchLight.SendNetworkUpdate();
 
             // Prevent nightvision since it's not useful while viewing the computer station.
             return false;
@@ -243,6 +264,14 @@ namespace Oxide.Plugins
                 return;
 
             TryDeploySearchLight(drone);
+        }
+
+        private Vector3 GetInitialAimDir(uint droneId)
+        {
+            Vector3 aimDir;
+            return _savedAimDirs.TryGetValue(droneId, out aimDir)
+                ? aimDir
+                : SearchLightDefaultAimDir;
         }
 
         #endregion
