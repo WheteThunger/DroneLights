@@ -112,11 +112,7 @@ namespace Oxide.Plugins
             if (basePlayer == null)
                 return null;
 
-            var station = basePlayer.GetMounted() as ComputerStation;
-            if (station == null)
-                return null;
-
-            var drone = GetControlledDrone(station);
+            var drone = GetControlledDrone(basePlayer);
             if (drone == null)
                 return null;
 
@@ -153,6 +149,15 @@ namespace Oxide.Plugins
 
         private static bool IsDroneEligible(Drone drone) =>
             !(drone is DeliveryDrone);
+
+        private static Drone GetControlledDrone(BasePlayer player)
+        {
+            var computerStation = player.GetMounted() as ComputerStation;
+            if (computerStation == null)
+                return null;
+
+            return GetControlledDrone(computerStation);
+        }
 
         private static Drone GetControlledDrone(ComputerStation station) =>
             station.currentlyControllingEnt.Get(serverside: true) as Drone;
