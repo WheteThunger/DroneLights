@@ -137,7 +137,7 @@ namespace Oxide.Plugins
 
             searchLight.SendNetworkUpdate();
 
-            // Prevent nightvision since it's not useful while viewing the computer station.
+            // Prevent other lights from toggling since they are not useful while viewing the computer station.
             return false;
         }
 
