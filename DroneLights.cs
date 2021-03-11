@@ -25,7 +25,7 @@ namespace Oxide.Plugins
         private static readonly Vector3 SearchLightDefaultAimDir = new Vector3(0, -0.2f, 0);
 
         private const float VerticalAimSensitivity = 15f;
-        private const float MinVerticalAngle = -0.5f;
+        private const float MinVerticalAngle = -0.75f;
         private const float MaxVerticalAngle = 0.5f;
 
         private readonly Dictionary<uint, Vector3> _savedAimDirs = new Dictionary<uint, Vector3>();
