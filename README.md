@@ -1,7 +1,8 @@
 ## Features
 
-- Automatically adds a search light to drones deployed by players with permission
-- Allows drone controllers to aim the search light and toggle it on and off
+- Automatically adds a search light to deployable drones (requires permission)
+- Allows remotely toggling the light on and off
+- Allows remotely aiming the light with mouse movements (requires permission)
 
 ## Installation
 
@@ -15,6 +16,32 @@ Note: The search light entity may not be visible in most cases due to client-sid
 
 - `dronelights.searchlight.autodeploy` -- Drones deployed by players with this permission will automatically have a search light.
   - Note: Reloading the plugin will automatically add search lights to existing drones owned by players with this permission.
+- `dronelights.searchlight.move` -- Allows the player to aim the search light vertically using mouse movements while controlling the drone.
+  - Note: Moving the search light has a small performance cost. This is intentionally reported to Oxide as part of the plugin's total hook time so that you can measure the performance impact on your server.
+
+## Configuration
+
+Default configuration:
+
+```json
+{
+  "SearchLight": {
+    "DefaultAngle": 70,
+    "MinAngle": 60,
+    "MaxAngle": 120,
+    "AimSensitivity": 0.25
+  }
+}
+```
+
+- `SearchLight`
+  - `DefaultAngle` (`0` - `180`) -- The default angle that the search light will be aiming when spawned.
+    - `0` = Down
+    - `90` = Forward
+    - `180` = Up
+  - `MinAngle` (`0` - `180`) -- Min angle players are allowed to aim the search light.
+  - `MaxAngle` (`0` - `180`) -- Max angle players are allowed to aim the search light.
+  - `AimSensitivity` -- Mouse sensitivity when aiming the search light.
 
 ## FAQ
 

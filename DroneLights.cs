@@ -1,7 +1,12 @@
-﻿using Oxide.Core;
+﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using Newtonsoft.Json.Serialization;
+using Oxide.Core;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
+using VLB;
 
 namespace Oxide.Plugins
 {
@@ -12,23 +17,20 @@ namespace Oxide.Plugins
         #region Fields
 
         private static DroneLights _pluginInstance;
+        private static Configuration _pluginConfig;
 
         private const string PermissionAutoDeploy = "dronelights.searchlight.autodeploy";
+        private const string PermissionMoveLight = "dronelights.searchlight.move";
 
         private const string SpherePrefab = "assets/prefabs/visualization/sphere.prefab";
         private const string SearchLightPrefab = "assets/prefabs/deployable/search light/searchlight.deployed.prefab";
 
+        private const float SearchLightYAxisRotation = 180;
+
         private static readonly Vector3 SphereEntityInitialLocalPosition = new Vector3(0, -200, 0);
         private static readonly Vector3 SphereEntityLocalPosition = new Vector3(0, -0.075f, 0.25f);
         private static readonly Vector3 SearchLightLocalPosition = new Vector3(0, -1.25f, -0.25f);
-        private static readonly Quaternion SearchLightLocalRotation = Quaternion.Euler(0, 180, 0);
-        private static readonly Vector3 SearchLightDefaultAimDir = new Vector3(0, -0.2f, 0);
 
-        private const float VerticalAimSensitivity = 15f;
-        private const float MinVerticalAngle = -0.75f;
-        private const float MaxVerticalAngle = 0.5f;
-
-        private readonly Dictionary<uint, Vector3> _savedAimDirs = new Dictionary<uint, Vector3>();
         private ProtectionProperties ImmortalProtection;
 
         #endregion
@@ -39,13 +41,16 @@ namespace Oxide.Plugins
         {
             _pluginInstance = this;
             permission.RegisterPermission(PermissionAutoDeploy, this);
+            permission.RegisterPermission(PermissionMoveLight, this);
             Unsubscribe(nameof(OnEntitySpawned));
         }
 
         private void Unload()
         {
+            SearchLightUpdater.DestroyAll();
             UnityEngine.Object.Destroy(ImmortalProtection);
             _pluginInstance = null;
+            _pluginConfig = null;
         }
 
         private void OnServerInitialized()
@@ -74,35 +79,6 @@ namespace Oxide.Plugins
             MaybeAutoDeploySearchLight(drone);
         }
 
-        private void OnEntityKill(Drone drone)
-        {
-            if (!IsDroneEligible(drone))
-                return;
-
-            _savedAimDirs.Remove(drone.net.ID);
-        }
-
-        private void OnBookmarkInput(ComputerStation station, BasePlayer player, InputState inputState)
-        {
-            var drone = GetControlledDrone(station);
-            if (drone == null)
-                return;
-
-            var searchLight = GetDroneSearchLight(drone);
-            if (searchLight == null)
-                return;
-
-            if (!searchLight.HasFlag(IOEntity.Flag_HasPower))
-                return;
-
-            var delta = inputState.current.mouseDelta.y * Time.deltaTime * VerticalAimSensitivity;
-
-            var newAimDir = drone.transform.TransformDirection(Vector3.forward);
-            newAimDir.y = Clamp(searchLight.aimDir.y + delta, MinVerticalAngle, MaxVerticalAngle);
-            searchLight.aimDir = newAimDir;
-            searchLight.SendNetworkUpdateImmediate();
-        }
-
         private object OnServerCommand(ConsoleSystem.Arg arg)
         {
             if (arg.Connection == null || arg.cmd.FullName != "inventory.lighttoggle")
@@ -121,20 +97,99 @@ namespace Oxide.Plugins
                 return null;
 
             var wasOn = searchLight.HasFlag(IOEntity.Flag_HasPower);
-            searchLight.SetFlag(IOEntity.Flag_HasPower, !wasOn, networkupdate: false);
-
-            if (wasOn)
-            {
-                _savedAimDirs[drone.net.ID] = searchLight.aimDir;
-                searchLight.ResetState();
-            }
-            else
-                searchLight.aimDir = drone.transform.TransformDirection(GetInitialAimDir(drone.net.ID));
-
-            searchLight.SendNetworkUpdate();
+            searchLight.SetFlag(IOEntity.Flag_HasPower, !wasOn);
 
             // Prevent other lights from toggling since they are not useful while viewing the computer station.
             return false;
+        }
+
+        private void OnBookmarkControlStarted(ComputerStation station, BasePlayer player, string bookmarkName, Drone drone)
+        {
+            var searchLight = GetDroneSearchLight(drone);
+            if (searchLight == null)
+                return;
+
+            if (permission.UserHasPermission(player.UserIDString, PermissionMoveLight))
+                drone.GetOrAddComponent<SearchLightUpdater>().Controller = player;
+        }
+
+        private void OnBookmarkControlEnded(ComputerStation station, BasePlayer player, Drone drone)
+        {
+            if (drone == null)
+                return;
+
+            var searchLightUpdater = drone.GetOrAddComponent<SearchLightUpdater>();
+            if (searchLightUpdater != null)
+                UnityEngine.Object.Destroy(searchLightUpdater);
+        }
+
+        private class SearchLightUpdater : FacepunchBehaviour
+        {
+            public static void DestroyAll()
+            {
+                foreach (var entity in BaseNetworkable.serverEntities)
+                {
+                    var drone = entity as Drone;
+                    if (drone == null)
+                        continue;
+
+                    var searchLightUpdater = drone.GetComponent<SearchLightUpdater>();
+                    if (searchLightUpdater == null)
+                        continue;
+
+                    Destroy(searchLightUpdater);
+                }
+            }
+
+            public BasePlayer Controller;
+
+            private Drone _drone;
+            private SearchLight _searchLight;
+
+            private void Awake()
+            {
+                _drone = GetComponent<Drone>();
+                _searchLight = GetDroneSearchLight(_drone);
+            }
+
+            private void Update()
+            {
+                if (Controller == null)
+                {
+                    Destroy(this);
+                    return;
+                }
+
+                if (!_searchLight.HasFlag(IOEntity.Flag_HasPower))
+                    return;
+
+                var mouseVerticalDelta = Controller.serverInput.current.mouseDelta.y;
+                if (mouseVerticalDelta == 0)
+                    return;
+
+                // Track the performance cost with Oxide so that server owners can be informed.
+                _pluginInstance.TrackStart();
+                UpdateAim(mouseVerticalDelta);
+                _pluginInstance.TrackEnd();
+            }
+
+            private void UpdateAim(float mouseVerticalDelta)
+            {
+                var localX = _searchLight.transform.localRotation.eulerAngles.x;
+                var searchLightSettings = _pluginConfig.SearchLight;
+
+                // Temporarily translate the angle by 90 degrees so it can be clamped based on a configured 0-180 range.
+                var newLocalX = (localX + 90) % 360;
+                newLocalX += mouseVerticalDelta * searchLightSettings.AimSensitivity;
+                newLocalX = Clamp(newLocalX, searchLightSettings.MinAngle, searchLightSettings.MaxAngle);
+                newLocalX = (newLocalX - 90) % 360;
+
+                _searchLight.transform.localRotation = Quaternion.Euler(newLocalX, SearchLightYAxisRotation, 0);
+
+                // This is the most expensive line in terms of performance.
+                // TODO: Replace this with _searchLight.SendNetworkUpdate_Position() when exposed since it's several times faster.
+                _searchLight.SendNetworkUpdateImmediate();
+            }
         }
 
         #endregion
@@ -223,7 +278,8 @@ namespace Oxide.Plugins
             sphereEntity.SetParent(drone);
             sphereEntity.Spawn();
 
-            SearchLight searchLight = GameManager.server.CreateEntity(SearchLightPrefab, SearchLightLocalPosition, SearchLightLocalRotation) as SearchLight;
+            var localRotation = Quaternion.Euler(_pluginConfig.SearchLight.DefaultAngle - 90 % 350, SearchLightYAxisRotation, 0);
+            SearchLight searchLight = GameManager.server.CreateEntity(SearchLightPrefab, SearchLightLocalPosition, localRotation) as SearchLight;
             if (searchLight == null)
                 return null;
 
@@ -271,12 +327,136 @@ namespace Oxide.Plugins
             TryDeploySearchLight(drone);
         }
 
-        private Vector3 GetInitialAimDir(uint droneId)
+        #endregion
+
+        #region Configuration
+
+        private class Configuration : SerializableConfiguration
         {
-            Vector3 aimDir;
-            return _savedAimDirs.TryGetValue(droneId, out aimDir)
-                ? aimDir
-                : SearchLightDefaultAimDir;
+            [JsonProperty("SearchLight")]
+            public SearchLightSettings SearchLight = new SearchLightSettings();
+        }
+
+        private class SearchLightSettings
+        {
+            [JsonProperty("DefaultAngle")]
+            public int DefaultAngle = 70;
+
+            [JsonProperty("MinAngle")]
+            public int MinAngle = 60;
+
+            [JsonProperty("MaxAngle")]
+            public int MaxAngle = 120;
+
+            [JsonProperty("AimSensitivity")]
+            public float AimSensitivity = 0.25f;
+        }
+
+        private Configuration GetDefaultConfig() => new Configuration();
+
+        #endregion
+
+        #region Configuration Boilerplate
+
+        private class SerializableConfiguration
+        {
+            public string ToJson() => JsonConvert.SerializeObject(this);
+
+            public Dictionary<string, object> ToDictionary() => JsonHelper.Deserialize(ToJson()) as Dictionary<string, object>;
+        }
+
+        private static class JsonHelper
+        {
+            public static object Deserialize(string json) => ToObject(JToken.Parse(json));
+
+            private static object ToObject(JToken token)
+            {
+                switch (token.Type)
+                {
+                    case JTokenType.Object:
+                        return token.Children<JProperty>()
+                                    .ToDictionary(prop => prop.Name,
+                                                  prop => ToObject(prop.Value));
+
+                    case JTokenType.Array:
+                        return token.Select(ToObject).ToList();
+
+                    default:
+                        return ((JValue)token).Value;
+                }
+            }
+        }
+
+        private bool MaybeUpdateConfig(SerializableConfiguration config)
+        {
+            var currentWithDefaults = config.ToDictionary();
+            var currentRaw = Config.ToDictionary(x => x.Key, x => x.Value);
+            return MaybeUpdateConfigDict(currentWithDefaults, currentRaw);
+        }
+
+        private bool MaybeUpdateConfigDict(Dictionary<string, object> currentWithDefaults, Dictionary<string, object> currentRaw)
+        {
+            bool changed = false;
+
+            foreach (var key in currentWithDefaults.Keys)
+            {
+                object currentRawValue;
+                if (currentRaw.TryGetValue(key, out currentRawValue))
+                {
+                    var defaultDictValue = currentWithDefaults[key] as Dictionary<string, object>;
+                    var currentDictValue = currentRawValue as Dictionary<string, object>;
+
+                    if (defaultDictValue != null)
+                    {
+                        if (currentDictValue == null)
+                        {
+                            currentRaw[key] = currentWithDefaults[key];
+                            changed = true;
+                        }
+                        else if (MaybeUpdateConfigDict(defaultDictValue, currentDictValue))
+                            changed = true;
+                    }
+                }
+                else
+                {
+                    currentRaw[key] = currentWithDefaults[key];
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+
+        protected override void LoadDefaultConfig() => _pluginConfig = GetDefaultConfig();
+
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            try
+            {
+                _pluginConfig = Config.ReadObject<Configuration>();
+                if (_pluginConfig == null)
+                {
+                    throw new JsonException();
+                }
+
+                if (MaybeUpdateConfig(_pluginConfig))
+                {
+                    LogWarning("Configuration appears to be outdated; updating and saving");
+                    SaveConfig();
+                }
+            }
+            catch
+            {
+                LogWarning($"Configuration file {Name}.json is invalid; using defaults");
+                LoadDefaultConfig();
+            }
+        }
+
+        protected override void SaveConfig()
+        {
+            Log($"Configuration changes saved to {Name}.json");
+            Config.WriteObject(_pluginConfig, true);
         }
 
         #endregion
