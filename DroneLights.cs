@@ -11,7 +11,7 @@ using VLB;
 namespace Oxide.Plugins
 {
     [Info("Drone Lights", "WhiteThunder", "1.0.0")]
-    [Description("Adds a controllable search light to deployable drones.")]
+    [Description("Adds controllable search lights to RC drones.")]
     internal class DroneLights : CovalencePlugin
     {
         #region Fields
