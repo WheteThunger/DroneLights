@@ -99,7 +99,7 @@ namespace Oxide.Plugins
             var wasOn = searchLight.HasFlag(IOEntity.Flag_HasPower);
             searchLight.SetFlag(IOEntity.Flag_HasPower, !wasOn);
 
-            // Prevent other lights from toggling since they are not useful while viewing the computer station.
+            // Prevent other lights from toggling since they are not useful while using the computer station.
             return false;
         }
 
