@@ -123,75 +123,6 @@ namespace Oxide.Plugins
                 UnityEngine.Object.Destroy(searchLightUpdater);
         }
 
-        private class SearchLightUpdater : FacepunchBehaviour
-        {
-            public static void DestroyAll()
-            {
-                foreach (var entity in BaseNetworkable.serverEntities)
-                {
-                    var drone = entity as Drone;
-                    if (drone == null)
-                        continue;
-
-                    var searchLightUpdater = drone.GetComponent<SearchLightUpdater>();
-                    if (searchLightUpdater == null)
-                        continue;
-
-                    Destroy(searchLightUpdater);
-                }
-            }
-
-            public BasePlayer Controller;
-
-            private Drone _drone;
-            private SearchLight _searchLight;
-
-            private void Awake()
-            {
-                _drone = GetComponent<Drone>();
-                _searchLight = GetDroneSearchLight(_drone);
-            }
-
-            private void Update()
-            {
-                if (Controller == null)
-                {
-                    Destroy(this);
-                    return;
-                }
-
-                if (!_searchLight.HasFlag(IOEntity.Flag_HasPower))
-                    return;
-
-                var mouseVerticalDelta = Controller.serverInput.current.mouseDelta.y;
-                if (mouseVerticalDelta == 0)
-                    return;
-
-                // Track the performance cost with Oxide so that server owners can be informed.
-                _pluginInstance.TrackStart();
-                UpdateAim(mouseVerticalDelta);
-                _pluginInstance.TrackEnd();
-            }
-
-            private void UpdateAim(float mouseVerticalDelta)
-            {
-                var localX = _searchLight.transform.localRotation.eulerAngles.x;
-                var searchLightSettings = _pluginConfig.SearchLight;
-
-                // Temporarily translate the angle by 90 degrees so it can be clamped based on a configured 0-180 range.
-                var newLocalX = (localX + 90) % 360;
-                newLocalX += mouseVerticalDelta * searchLightSettings.AimSensitivity;
-                newLocalX = Clamp(newLocalX, searchLightSettings.MinAngle, searchLightSettings.MaxAngle);
-                newLocalX = (newLocalX - 90) % 360;
-
-                _searchLight.transform.localRotation = Quaternion.Euler(newLocalX, SearchLightYAxisRotation, 0);
-
-                // This is the most expensive line in terms of performance.
-                // TODO: Replace this with _searchLight.SendNetworkUpdate_Position() when exposed since it's several times faster.
-                _searchLight.SendNetworkUpdateImmediate();
-            }
-        }
-
         #endregion
 
         #region Helper Methods
@@ -325,6 +256,79 @@ namespace Oxide.Plugins
                 return;
 
             TryDeploySearchLight(drone);
+        }
+
+        #endregion
+
+        #region Classes
+
+        private class SearchLightUpdater : FacepunchBehaviour
+        {
+            public static void DestroyAll()
+            {
+                foreach (var entity in BaseNetworkable.serverEntities)
+                {
+                    var drone = entity as Drone;
+                    if (drone == null)
+                        continue;
+
+                    var searchLightUpdater = drone.GetComponent<SearchLightUpdater>();
+                    if (searchLightUpdater == null)
+                        continue;
+
+                    Destroy(searchLightUpdater);
+                }
+            }
+
+            public BasePlayer Controller;
+
+            private Drone _drone;
+            private SearchLight _searchLight;
+
+            private void Awake()
+            {
+                _drone = GetComponent<Drone>();
+                _searchLight = GetDroneSearchLight(_drone);
+            }
+
+            private void Update()
+            {
+                if (Controller == null)
+                {
+                    Destroy(this);
+                    return;
+                }
+
+                if (!_searchLight.HasFlag(IOEntity.Flag_HasPower))
+                    return;
+
+                var mouseVerticalDelta = Controller.serverInput.current.mouseDelta.y;
+                if (mouseVerticalDelta == 0)
+                    return;
+
+                // Track the performance cost with Oxide so that server owners can be informed.
+                _pluginInstance.TrackStart();
+                UpdateAim(mouseVerticalDelta);
+                _pluginInstance.TrackEnd();
+            }
+
+            private void UpdateAim(float mouseVerticalDelta)
+            {
+                var localX = _searchLight.transform.localRotation.eulerAngles.x;
+                var searchLightSettings = _pluginConfig.SearchLight;
+
+                // Temporarily translate the angle by 90 degrees so it can be clamped based on a configured 0-180 range.
+                var newLocalX = (localX + 90) % 360;
+                newLocalX += mouseVerticalDelta * searchLightSettings.AimSensitivity;
+                newLocalX = Clamp(newLocalX, searchLightSettings.MinAngle, searchLightSettings.MaxAngle);
+                newLocalX = (newLocalX - 90) % 360;
+
+                _searchLight.transform.localRotation = Quaternion.Euler(newLocalX, SearchLightYAxisRotation, 0);
+
+                // This is the most expensive line in terms of performance.
+                // TODO: Replace this with _searchLight.SendNetworkUpdate_Position() when exposed since it's several times faster.
+                _searchLight.SendNetworkUpdateImmediate();
+            }
         }
 
         #endregion
