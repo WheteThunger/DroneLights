@@ -96,8 +96,7 @@ namespace Oxide.Plugins
             if (searchLight == null)
                 return null;
 
-            var wasOn = searchLight.HasFlag(IOEntity.Flag_HasPower);
-            searchLight.SetFlag(IOEntity.Flag_HasPower, !wasOn);
+            searchLight.SetFlag(IOEntity.Flag_HasPower, !searchLight.HasFlag(IOEntity.Flag_HasPower));
 
             // Prevent other lights from toggling since they are not useful while using the computer station.
             return false;
