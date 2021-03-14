@@ -343,7 +343,7 @@ namespace Oxide.Plugins
         private class SearchLightSettings
         {
             [JsonProperty("DefaultAngle")]
-            public int DefaultAngle = 70;
+            public int DefaultAngle = 75;
 
             [JsonProperty("MinAngle")]
             public int MinAngle = 60;
