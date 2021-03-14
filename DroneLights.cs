@@ -261,7 +261,7 @@ namespace Oxide.Plugins
 
         #region Classes
 
-        private class SearchLightUpdater : FacepunchBehaviour
+        private class SearchLightUpdater : MonoBehaviour
         {
             public static void DestroyAll()
             {
