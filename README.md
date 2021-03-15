@@ -26,7 +26,7 @@ Default configuration:
 ```json
 {
   "SearchLight": {
-    "DefaultAngle": 70,
+    "DefaultAngle": 75,
     "MinAngle": 60,
     "MaxAngle": 120,
     "AimSensitivity": 0.25
