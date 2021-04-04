@@ -10,7 +10,7 @@ using VLB;
 
 namespace Oxide.Plugins
 {
-    [Info("Drone Lights", "WhiteThunder", "1.0.0")]
+    [Info("Drone Lights", "WhiteThunder", "1.0.1")]
     [Description("Adds controllable search lights to RC drones.")]
     internal class DroneLights : CovalencePlugin
     {
@@ -325,8 +325,7 @@ namespace Oxide.Plugins
                 _searchLight.transform.localRotation = Quaternion.Euler(newLocalX, SearchLightYAxisRotation, 0);
 
                 // This is the most expensive line in terms of performance.
-                // TODO: Replace this with _searchLight.SendNetworkUpdate_Position() when exposed since it's several times faster.
-                _searchLight.SendNetworkUpdateImmediate();
+                _searchLight.SendNetworkUpdate_Position();
             }
         }
 
