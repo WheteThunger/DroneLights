@@ -10,7 +10,7 @@ using VLB;
 
 namespace Oxide.Plugins
 {
-    [Info("Drone Lights", "WhiteThunder", "1.0.1")]
+    [Info("Drone Lights", "WhiteThunder", "1.0.2")]
     [Description("Adds controllable search lights to RC drones.")]
     internal class DroneLights : CovalencePlugin
     {
@@ -27,7 +27,9 @@ namespace Oxide.Plugins
 
         private const float SearchLightYAxisRotation = 180;
 
-        private static readonly Vector3 SphereEntityInitialLocalPosition = new Vector3(0, -200, 0);
+        private const float SearchLightScale = 0.1f;
+
+        private static readonly Vector3 SphereEntityInitialLocalPosition = new Vector3(0, -100, 0);
         private static readonly Vector3 SphereEntityLocalPosition = new Vector3(0, -0.075f, 0.25f);
         private static readonly Vector3 SearchLightLocalPosition = new Vector3(0, -1.25f, -0.25f);
 
@@ -79,7 +81,7 @@ namespace Oxide.Plugins
             MaybeAutoDeploySearchLight(drone);
         }
 
-        private object OnServerCommand(ConsoleSystem.Arg arg)
+        private bool? OnServerCommand(ConsoleSystem.Arg arg)
         {
             if (arg.Connection == null || arg.cmd.FullName != "inventory.lighttoggle")
                 return null;
@@ -147,14 +149,20 @@ namespace Oxide.Plugins
         private static Drone GetControlledDrone(ComputerStation station) =>
             station.currentlyControllingEnt.Get(serverside: true) as Drone;
 
-        private static SearchLight GetDroneSearchLight(Drone drone) =>
-            GetGrandChildOfType<SphereEntity, SearchLight>(drone);
+        private static SearchLight GetDroneSearchLight(Drone drone, out SphereEntity parentSphere) =>
+            GetGrandChildOfType<SphereEntity, SearchLight>(drone, out parentSphere);
 
-        private static T2 GetGrandChildOfType<T1, T2>(BaseEntity entity) where T1 : BaseEntity where T2 : BaseEntity
+        private static SearchLight GetDroneSearchLight(Drone drone)
+        {
+            SphereEntity parentSphere;
+            return GetGrandChildOfType<SphereEntity, SearchLight>(drone, out parentSphere);
+        }
+
+        private static T2 GetGrandChildOfType<T1, T2>(BaseEntity entity, out T1 childOfType) where T1 : BaseEntity where T2 : BaseEntity
         {
             foreach (var child in entity.children)
             {
-                var childOfType = child as T1;
+                childOfType = child as T1;
                 if (childOfType == null)
                     continue;
 
@@ -165,6 +173,8 @@ namespace Oxide.Plugins
                         return grandChildOfType;
                 }
             }
+
+            childOfType = null;
             return null;
         }
 
@@ -194,16 +204,21 @@ namespace Oxide.Plugins
             if (DeployLightWasBlocked(drone))
                 return null;
 
+            var sphereLocalPosition = SphereEntityInitialLocalPosition;
+            var scale = drone.transform.lossyScale.y;
+            if (scale != 0)
+                sphereLocalPosition = sphereLocalPosition / scale;
+
             // Spawn the search light below the map initially while the resize is performed.
-            SphereEntity sphereEntity = GameManager.server.CreateEntity(SpherePrefab, SphereEntityInitialLocalPosition) as SphereEntity;
+            SphereEntity sphereEntity = GameManager.server.CreateEntity(SpherePrefab, sphereLocalPosition) as SphereEntity;
             if (sphereEntity == null)
                 return null;
 
             // Fix the issue where leaving the area and returning would not recreate the sphere and its children on clients.
             sphereEntity.globalBroadcast = false;
 
-            sphereEntity.currentRadius = 0.1f;
-            sphereEntity.lerpRadius = 0.1f;
+            sphereEntity.currentRadius = SearchLightScale;
+            sphereEntity.lerpRadius = SearchLightScale;
 
             sphereEntity.SetParent(drone);
             sphereEntity.Spawn();
@@ -255,6 +270,23 @@ namespace Oxide.Plugins
                 return;
 
             TryDeploySearchLight(drone);
+        }
+
+        private void OnDroneScaleBegin(Drone drone, BaseEntity rootEntity, float scale, float previousScale)
+        {
+            if (scale == 0)
+                return;
+
+            SphereEntity parentSphere;
+            var searchLight = GetDroneSearchLight(drone, out parentSphere);
+            if (searchLight == null)
+                return;
+
+            var sphereTransform = parentSphere.transform;
+            if (sphereTransform.localPosition == SphereEntityLocalPosition)
+                return;
+
+            sphereTransform.localPosition = SphereEntityInitialLocalPosition / scale;
         }
 
         #endregion
@@ -324,6 +356,7 @@ namespace Oxide.Plugins
 
                 _searchLight.transform.localRotation = Quaternion.Euler(newLocalX, SearchLightYAxisRotation, 0);
 
+                _searchLight.InvalidateNetworkCache();
                 // This is the most expensive line in terms of performance.
                 _searchLight.SendNetworkUpdate_Position();
             }
