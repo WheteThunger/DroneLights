@@ -121,7 +121,7 @@ namespace Oxide.Plugins
 
             var searchLightUpdater = drone.GetOrAddComponent<SearchLightUpdater>();
             if (searchLightUpdater != null)
-                UnityEngine.Object.Destroy(searchLightUpdater);
+                UnityEngine.Object.DestroyImmediate(searchLightUpdater);
         }
 
         #endregion
