@@ -26,7 +26,6 @@ namespace Oxide.Plugins
         private const string SearchLightPrefab = "assets/prefabs/deployable/search light/searchlight.deployed.prefab";
 
         private const float SearchLightYAxisRotation = 180;
-
         private const float SearchLightScale = 0.1f;
 
         private static readonly Vector3 SphereEntityInitialLocalPosition = new Vector3(0, -100, 0);
@@ -49,8 +48,11 @@ namespace Oxide.Plugins
 
         private void Unload()
         {
-            SearchLightUpdater.DestroyAll();
+            foreach (var player in BasePlayer.activePlayerList)
+                SearchLightUpdater.StopControl(player);
+
             UnityEngine.Object.Destroy(ImmortalProtection);
+
             _pluginInstance = null;
             _pluginConfig = null;
         }
@@ -68,6 +70,15 @@ namespace Oxide.Plugins
                     continue;
 
                 AddOrUpdateSearchLight(drone);
+            }
+
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                var searchLight = GetControlledSearchLight(player);
+                if (searchLight == null)
+                    continue;
+
+                SearchLightUpdater.StartControl(player, searchLight);
             }
 
             Subscribe(nameof(OnEntitySpawned));
@@ -90,15 +101,11 @@ namespace Oxide.Plugins
             if (basePlayer == null)
                 return null;
 
-            var drone = GetControlledDrone(basePlayer);
-            if (drone == null)
-                return null;
-
-            var searchLight = GetDroneSearchLight(drone);
+            var searchLight = GetControlledSearchLight(basePlayer);
             if (searchLight == null)
                 return null;
 
-            searchLight.SetFlag(IOEntity.Flag_HasPower, !searchLight.HasFlag(IOEntity.Flag_HasPower));
+            searchLight.SetFlag(IOEntity.Flag_HasPower, !searchLight.IsPowered());
 
             // Prevent other lights from toggling since they are not useful while using the computer station.
             return false;
@@ -111,17 +118,12 @@ namespace Oxide.Plugins
                 return;
 
             if (permission.UserHasPermission(player.UserIDString, PermissionMoveLight))
-                drone.GetOrAddComponent<SearchLightUpdater>().Controller = player;
+                SearchLightUpdater.StartControl(player, searchLight);
         }
 
         private void OnBookmarkControlEnded(ComputerStation station, BasePlayer player, Drone drone)
         {
-            if (drone == null)
-                return;
-
-            var searchLightUpdater = drone.GetOrAddComponent<SearchLightUpdater>();
-            if (searchLightUpdater != null)
-                UnityEngine.Object.DestroyImmediate(searchLightUpdater);
+            SearchLightUpdater.StopControl(player);
         }
 
         #endregion
@@ -137,6 +139,9 @@ namespace Oxide.Plugins
         private static bool IsDroneEligible(Drone drone) =>
             !(drone is DeliveryDrone);
 
+        private static Drone GetControlledDrone(ComputerStation station) =>
+            station.currentlyControllingEnt.Get(serverside: true) as Drone;
+
         private static Drone GetControlledDrone(BasePlayer player)
         {
             var computerStation = player.GetMounted() as ComputerStation;
@@ -144,18 +149,6 @@ namespace Oxide.Plugins
                 return null;
 
             return GetControlledDrone(computerStation);
-        }
-
-        private static Drone GetControlledDrone(ComputerStation station) =>
-            station.currentlyControllingEnt.Get(serverside: true) as Drone;
-
-        private static SearchLight GetDroneSearchLight(Drone drone, out SphereEntity parentSphere) =>
-            GetGrandChildOfType<SphereEntity, SearchLight>(drone, out parentSphere);
-
-        private static SearchLight GetDroneSearchLight(Drone drone)
-        {
-            SphereEntity parentSphere;
-            return GetGrandChildOfType<SphereEntity, SearchLight>(drone, out parentSphere);
         }
 
         private static T2 GetGrandChildOfType<T1, T2>(BaseEntity entity, out T1 childOfType) where T1 : BaseEntity where T2 : BaseEntity
@@ -176,6 +169,24 @@ namespace Oxide.Plugins
 
             childOfType = null;
             return null;
+        }
+
+        private static SearchLight GetDroneSearchLight(Drone drone, out SphereEntity parentSphere) =>
+            GetGrandChildOfType<SphereEntity, SearchLight>(drone, out parentSphere);
+
+        private static SearchLight GetDroneSearchLight(Drone drone)
+        {
+            SphereEntity parentSphere;
+            return GetDroneSearchLight(drone, out parentSphere);
+        }
+
+        private static SearchLight GetControlledSearchLight(BasePlayer player)
+        {
+            var drone = GetControlledDrone(player);
+            if (drone == null)
+                return null;
+
+            return GetDroneSearchLight(drone);
         }
 
         private static void RemoveProblemComponents(BaseEntity entity)
@@ -293,47 +304,41 @@ namespace Oxide.Plugins
 
         #region Classes
 
-        private class SearchLightUpdater : MonoBehaviour
+        private class SearchLightUpdater : EntityComponent<BasePlayer>
         {
-            public static void DestroyAll()
-            {
-                foreach (var entity in BaseNetworkable.serverEntities)
-                {
-                    var drone = entity as Drone;
-                    if (drone == null)
-                        continue;
+            public static void StartControl(BasePlayer player, SearchLight searchLight) =>
+                player.GetOrAddComponent<SearchLightUpdater>().OnControlStarted(searchLight);
 
-                    var searchLightUpdater = drone.GetComponent<SearchLightUpdater>();
-                    if (searchLightUpdater == null)
-                        continue;
+            public static void StopControl(BasePlayer player) =>
+                player.GetComponent<SearchLightUpdater>()?.OnControlStopped();
 
-                    Destroy(searchLightUpdater);
-                }
-            }
-
-            public BasePlayer Controller;
-
-            private Drone _drone;
             private SearchLight _searchLight;
+            private Transform _searchLightTransform;
 
-            private void Awake()
+            private void OnControlStarted(SearchLight searchLight)
             {
-                _drone = GetComponent<Drone>();
-                _searchLight = GetDroneSearchLight(_drone);
+                CancelInvoke(DelayedDestroy);
+
+                _searchLight = searchLight;
+                _searchLightTransform = searchLight.transform;
             }
+
+            private void DelayedDestroy() => DestroyImmediate(this);
+
+            private void OnControlStopped() => Invoke(DelayedDestroy, 0);
 
             private void Update()
             {
-                if (Controller == null)
+                if (_searchLight == null)
                 {
-                    Destroy(this);
+                    OnControlStopped();
                     return;
                 }
 
-                if (!_searchLight.HasFlag(IOEntity.Flag_HasPower))
+                if (!_searchLight.IsPowered())
                     return;
 
-                var mouseVerticalDelta = Controller.serverInput.current.mouseDelta.y * Time.deltaTime * 60;
+                var mouseVerticalDelta = baseEntity.serverInput.current.mouseDelta.y;
                 if (mouseVerticalDelta == 0)
                     return;
 
@@ -345,18 +350,18 @@ namespace Oxide.Plugins
 
             private void UpdateAim(float mouseVerticalDelta)
             {
-                var localX = _searchLight.transform.localRotation.eulerAngles.x;
+                var localX = _searchLightTransform.localRotation.eulerAngles.x;
                 var searchLightSettings = _pluginConfig.SearchLight;
 
                 // Temporarily translate the angle by 90 degrees so it can be clamped based on a configured 0-180 range.
                 var newLocalX = (localX + 90) % 360;
-                newLocalX += mouseVerticalDelta * searchLightSettings.AimSensitivity;
+                newLocalX += searchLightSettings.AimSensitivity * mouseVerticalDelta * Time.deltaTime * 60;
                 newLocalX = Clamp(newLocalX, searchLightSettings.MinAngle, searchLightSettings.MaxAngle);
                 newLocalX = (newLocalX - 90) % 360;
 
-                _searchLight.transform.localRotation = Quaternion.Euler(newLocalX, SearchLightYAxisRotation, 0);
-
+                _searchLightTransform.localRotation = Quaternion.Euler(newLocalX, SearchLightYAxisRotation, 0);
                 _searchLight.InvalidateNetworkCache();
+
                 // This is the most expensive line in terms of performance.
                 _searchLight.SendNetworkUpdate_Position();
             }
