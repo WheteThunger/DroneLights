@@ -333,7 +333,7 @@ namespace Oxide.Plugins
                 if (!_searchLight.HasFlag(IOEntity.Flag_HasPower))
                     return;
 
-                var mouseVerticalDelta = Controller.serverInput.current.mouseDelta.y;
+                var mouseVerticalDelta = Controller.serverInput.current.mouseDelta.y * Time.deltaTime * 60;
                 if (mouseVerticalDelta == 0)
                     return;
 
@@ -384,7 +384,7 @@ namespace Oxide.Plugins
             public int MaxAngle = 120;
 
             [JsonProperty("AimSensitivity")]
-            public float AimSensitivity = 0.25f;
+            public float AimSensitivity = 1;
         }
 
         private Configuration GetDefaultConfig() => new Configuration();
@@ -481,8 +481,9 @@ namespace Oxide.Plugins
                     SaveConfig();
                 }
             }
-            catch
+            catch (Exception e)
             {
+                LogError(e.Message);
                 LogWarning($"Configuration file {Name}.json is invalid; using defaults");
                 LoadDefaultConfig();
             }
