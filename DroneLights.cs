@@ -10,7 +10,7 @@ using VLB;
 
 namespace Oxide.Plugins
 {
-    [Info("Drone Lights", "WhiteThunder", "1.0.3")]
+    [Info("Drone Lights", "WhiteThunder", "1.0.4")]
     [Description("Adds controllable search lights to RC drones.")]
     internal class DroneLights : CovalencePlugin
     {
@@ -225,8 +225,7 @@ namespace Oxide.Plugins
             if (sphereEntity == null)
                 return null;
 
-            // Fix the issue where leaving the area and returning would not recreate the sphere and its children on clients.
-            sphereEntity.globalBroadcast = false;
+            SetupSphereEntity(sphereEntity);
 
             sphereEntity.currentRadius = SearchLightScale;
             sphereEntity.lerpRadius = SearchLightScale;
@@ -254,10 +253,17 @@ namespace Oxide.Plugins
             return searchLight;
         }
 
+        private void SetupSphereEntity(SphereEntity sphereEntity)
+        {
+            sphereEntity.EnableSaving(true);
+            sphereEntity.EnableGlobalBroadcast(false);
+        }
+
         private void SetupSearchLight(SearchLight searchLight)
         {
             RemoveProblemComponents(searchLight);
             HideInputsAndOutputs(searchLight);
+            searchLight.EnableSaving(true);
             searchLight.SetFlag(BaseEntity.Flags.Busy, true);
             searchLight.baseProtection = ImmortalProtection;
             searchLight.pickup.enabled = false;
@@ -265,13 +271,15 @@ namespace Oxide.Plugins
 
         private void AddOrUpdateSearchLight(Drone drone)
         {
-            var searchLight = GetDroneSearchLight(drone);
+            SphereEntity sphereEntity;
+            var searchLight = GetDroneSearchLight(drone, out sphereEntity);
             if (searchLight == null)
             {
                 MaybeAutoDeploySearchLight(drone);
                 return;
             }
 
+            SetupSphereEntity(sphereEntity);
             SetupSearchLight(searchLight);
         }
 
