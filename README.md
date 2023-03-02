@@ -4,6 +4,10 @@
 - Allows remotely toggling the light on and off with the standard key bind
 - Allows remotely aiming the light with mouse movements (requires permission)
 
+## Known issues
+
+Since the March 2023 Rust update, the Drone camera can now be pitched up and down, which uses the same mouse control as this plugin uses to pitch the search light up and down. This may be resolved in a future update to this plugin.
+
 ## Installation
 
 1. Add the plugin to the `oxide/plugins` directory of your Rust server installation
