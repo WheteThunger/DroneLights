@@ -1,23 +1,19 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
 using Oxide.Core;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UnityEngine;
-using VLB;
 
 namespace Oxide.Plugins
 {
-    [Info("Drone Lights", "WhiteThunder", "1.0.4")]
+    [Info("Drone Lights", "WhiteThunder", "2.0.0")]
     [Description("Adds controllable search lights to RC drones.")]
     internal class DroneLights : CovalencePlugin
     {
         #region Fields
-
-        private static DroneLights _pluginInstance;
-        private static Configuration _pluginConfig;
 
         private const string PermissionAutoDeploy = "dronelights.searchlight.autodeploy";
         private const string PermissionMoveLight = "dronelights.searchlight.move";
@@ -28,11 +24,15 @@ namespace Oxide.Plugins
         private const float SearchLightYAxisRotation = 180;
         private const float SearchLightScale = 0.1f;
 
-        private static readonly Vector3 SphereEntityInitialLocalPosition = new Vector3(0, -100, 0);
         private static readonly Vector3 SphereEntityLocalPosition = new Vector3(0, -0.075f, 0.25f);
         private static readonly Vector3 SearchLightLocalPosition = new Vector3(0, -1.25f, -0.25f);
 
-        private ProtectionProperties ImmortalProtection;
+        private static readonly FieldInfo DronePitchField = typeof(Drone).GetField("pitch", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+        private readonly object False = false;
+
+        private Configuration _config;
+        private ProtectionProperties _immortalProtection;
 
         #endregion
 
@@ -40,7 +40,6 @@ namespace Oxide.Plugins
 
         private void Init()
         {
-            _pluginInstance = this;
             permission.RegisterPermission(PermissionAutoDeploy, this);
             permission.RegisterPermission(PermissionMoveLight, this);
             Unsubscribe(nameof(OnEntitySpawned));
@@ -48,20 +47,23 @@ namespace Oxide.Plugins
 
         private void Unload()
         {
-            foreach (var player in BasePlayer.activePlayerList)
-                SearchLightUpdater.StopControl(player);
+            foreach (var entity in BaseNetworkable.serverEntities)
+            {
+                var drone = entity as Drone;
+                if (drone == null || !IsDroneEligible(drone))
+                    continue;
 
-            UnityEngine.Object.Destroy(ImmortalProtection);
+                SearchLightUpdater.RemoveFromDrone(drone);
+            }
 
-            _pluginInstance = null;
-            _pluginConfig = null;
+            UnityEngine.Object.Destroy(_immortalProtection);
         }
 
         private void OnServerInitialized()
         {
-            ImmortalProtection = ScriptableObject.CreateInstance<ProtectionProperties>();
-            ImmortalProtection.name = "DroneLightsProtection";
-            ImmortalProtection.Add(1);
+            _immortalProtection = ScriptableObject.CreateInstance<ProtectionProperties>();
+            _immortalProtection.name = "DroneLightsProtection";
+            _immortalProtection.Add(1);
 
             foreach (var entity in BaseNetworkable.serverEntities)
             {
@@ -74,11 +76,15 @@ namespace Oxide.Plugins
 
             foreach (var player in BasePlayer.activePlayerList)
             {
-                var searchLight = GetControlledSearchLight(player);
-                if (searchLight == null)
+                var station = player.GetMounted() as ComputerStation;
+                if (station == null)
                     continue;
 
-                SearchLightUpdater.StartControl(player, searchLight);
+                var drone = station.currentlyControllingEnt.Get(serverside: true) as Drone;
+                if (drone == null)
+                    continue;
+
+                OnBookmarkControlStarted(station, player, string.Empty, drone);
             }
 
             Subscribe(nameof(OnEntitySpawned));
@@ -92,7 +98,7 @@ namespace Oxide.Plugins
             MaybeAutoDeploySearchLight(drone);
         }
 
-        private bool? OnServerCommand(ConsoleSystem.Arg arg)
+        private object OnServerCommand(ConsoleSystem.Arg arg)
         {
             if (arg.Connection == null || arg.cmd.FullName != "inventory.lighttoggle")
                 return null;
@@ -108,22 +114,29 @@ namespace Oxide.Plugins
             searchLight.SetFlag(IOEntity.Flag_HasPower, !searchLight.IsPowered());
 
             // Prevent other lights from toggling since they are not useful while using the computer station.
-            return false;
+            return False;
         }
 
         private void OnBookmarkControlStarted(ComputerStation station, BasePlayer player, string bookmarkName, Drone drone)
         {
-            var searchLight = GetDroneSearchLight(drone);
+            var controllerSteamId = drone.ControllingViewerId?.SteamId;
+            if (controllerSteamId != player.userID)
+                return;
+
+            SphereEntity sphereEntity;
+            var searchLight = GetDroneSearchLight(drone, out sphereEntity);
             if (searchLight == null)
                 return;
 
             if (permission.UserHasPermission(player.UserIDString, PermissionMoveLight))
-                SearchLightUpdater.StartControl(player, searchLight);
-        }
-
-        private void OnBookmarkControlEnded(ComputerStation station, BasePlayer player, Drone drone)
-        {
-            SearchLightUpdater.StopControl(player);
+            {
+                SearchLightUpdater.AddOrUpdateForDrone(this, drone, sphereEntity, searchLight);
+            }
+            else
+            {
+                var defaultAngle = _config.SearchLight.DefaultAngle - 90 % 360;
+                SetLightAngle(drone, sphereEntity, sphereEntity.transform, defaultAngle);
+            }
         }
 
         #endregion
@@ -132,15 +145,19 @@ namespace Oxide.Plugins
 
         private static bool DeployLightWasBlocked(Drone drone)
         {
-            object hookResult = Interface.CallHook("OnDroneSearchLightDeploy", drone);
+            var hookResult = Interface.CallHook("OnDroneSearchLightDeploy", drone);
             return hookResult is bool && (bool)hookResult == false;
         }
 
-        private static bool IsDroneEligible(Drone drone) =>
-            !(drone is DeliveryDrone);
+        private static bool IsDroneEligible(Drone drone)
+        {
+            return !(drone is DeliveryDrone);
+        }
 
-        private static Drone GetControlledDrone(ComputerStation station) =>
-            station.currentlyControllingEnt.Get(serverside: true) as Drone;
+        private static Drone GetControlledDrone(ComputerStation station)
+        {
+            return station.currentlyControllingEnt.Get(serverside: true) as Drone;
+        }
 
         private static Drone GetControlledDrone(BasePlayer player)
         {
@@ -171,28 +188,36 @@ namespace Oxide.Plugins
             return null;
         }
 
-        private static SearchLight GetDroneSearchLight(Drone drone, out SphereEntity parentSphere) =>
-            GetGrandChildOfType<SphereEntity, SearchLight>(drone, out parentSphere);
-
-        private static SearchLight GetDroneSearchLight(Drone drone)
+        private static SearchLight GetDroneSearchLight(Drone drone, out SphereEntity parentSphere)
         {
-            SphereEntity parentSphere;
+            return GetGrandChildOfType<SphereEntity, SearchLight>(drone, out parentSphere);
+        }
+
+        private static SearchLight GetControlledSearchLight(BasePlayer player, out SphereEntity parentSphere, out Drone drone)
+        {
+            drone = GetControlledDrone(player);
+            if (drone == null)
+            {
+                parentSphere = null;
+                return null;
+            }
+
             return GetDroneSearchLight(drone, out parentSphere);
         }
 
         private static SearchLight GetControlledSearchLight(BasePlayer player)
         {
-            var drone = GetControlledDrone(player);
-            if (drone == null)
-                return null;
-
-            return GetDroneSearchLight(drone);
+            Drone drone;
+            SphereEntity parentSphere;
+            return GetControlledSearchLight(player, out parentSphere, out drone);
         }
 
         private static void RemoveProblemComponents(BaseEntity entity)
         {
             foreach (var collider in entity.GetComponentsInChildren<Collider>())
+            {
                 UnityEngine.Object.DestroyImmediate(collider);
+            }
 
             UnityEngine.Object.DestroyImmediate(entity.GetComponent<DestroyOnGroundMissing>());
             UnityEngine.Object.DestroyImmediate(entity.GetComponent<GroundWatch>());
@@ -202,26 +227,53 @@ namespace Oxide.Plugins
         {
             // Trick to hide the inputs and outputs on the client.
             foreach (var input in ioEntity.inputs)
+            {
                 input.type = IOEntity.IOType.Generic;
+            }
 
             foreach (var output in ioEntity.outputs)
+            {
                 output.type = IOEntity.IOType.Generic;
+            }
         }
 
-        private static float Clamp(float x, float min, float max) => Math.Max(min, Math.Min(x, max));
+        private static void SetLightAngle(Drone drone, SphereEntity sphere, Transform transform, float overrideAngle = 0)
+        {
+            float desiredPitch;
+
+            if (overrideAngle != 0)
+            {
+                desiredPitch = overrideAngle;
+            }
+            else
+            {
+                if (DronePitchField == null)
+                    return;
+
+                desiredPitch = (float)DronePitchField.GetValue(drone);
+                desiredPitch = (360 - desiredPitch) % 360;
+
+            }
+
+            var currentPitch = transform.localEulerAngles.x;
+            if (Math.Abs(currentPitch - desiredPitch) < 0.1f)
+                return;
+
+            transform.localEulerAngles = new Vector3(desiredPitch, SearchLightYAxisRotation, 0);
+            sphere.InvalidateNetworkCache();
+
+            // This is the most expensive line in terms of performance.
+            sphere.SendNetworkUpdate_Position();
+        }
 
         private SearchLight TryDeploySearchLight(Drone drone)
         {
             if (DeployLightWasBlocked(drone))
                 return null;
 
-            var sphereLocalPosition = SphereEntityInitialLocalPosition;
-            var scale = drone.transform.lossyScale.y;
-            if (scale != 0)
-                sphereLocalPosition = sphereLocalPosition / scale;
-
-            // Spawn the search light below the map initially while the resize is performed.
-            SphereEntity sphereEntity = GameManager.server.CreateEntity(SpherePrefab, sphereLocalPosition) as SphereEntity;
+            var defaultAngle = _config.SearchLight.DefaultAngle - 90 % 360;
+            var localRotation = Quaternion.Euler(defaultAngle, SearchLightYAxisRotation, 0);
+            var sphereEntity = GameManager.server.CreateEntity(SpherePrefab, SphereEntityLocalPosition, localRotation) as SphereEntity;
             if (sphereEntity == null)
                 return null;
 
@@ -233,28 +285,28 @@ namespace Oxide.Plugins
             sphereEntity.SetParent(drone);
             sphereEntity.Spawn();
 
-            var localRotation = Quaternion.Euler(_pluginConfig.SearchLight.DefaultAngle - 90 % 350, SearchLightYAxisRotation, 0);
-            SearchLight searchLight = GameManager.server.CreateEntity(SearchLightPrefab, SearchLightLocalPosition, localRotation) as SearchLight;
+            var searchLight = GameManager.server.CreateEntity(SearchLightPrefab, SearchLightLocalPosition) as SearchLight;
             if (searchLight == null)
                 return null;
 
             SetupSearchLight(searchLight);
 
+            searchLight.SetFlag(BaseEntity.Flags.Disabled, true);
             searchLight.SetParent(sphereEntity);
             searchLight.Spawn();
             Interface.CallHook("OnDroneSearchLightDeployed", drone, searchLight);
 
-            timer.Once(3, () =>
+            searchLight.Invoke(() =>
             {
-                if (sphereEntity != null)
-                    sphereEntity.transform.localPosition = SphereEntityLocalPosition;
-            });
+                searchLight.SetFlag(BaseEntity.Flags.Disabled, false);
+            }, 5f);
 
             return searchLight;
         }
 
         private void SetupSphereEntity(SphereEntity sphereEntity)
         {
+            sphereEntity.transform.localPosition = SphereEntityLocalPosition;
             sphereEntity.EnableSaving(true);
             sphereEntity.EnableGlobalBroadcast(false);
         }
@@ -265,7 +317,7 @@ namespace Oxide.Plugins
             HideInputsAndOutputs(searchLight);
             searchLight.EnableSaving(true);
             searchLight.SetFlag(BaseEntity.Flags.Busy, true);
-            searchLight.baseProtection = ImmortalProtection;
+            searchLight.baseProtection = _immortalProtection;
             searchLight.pickup.enabled = false;
         }
 
@@ -291,87 +343,62 @@ namespace Oxide.Plugins
             TryDeploySearchLight(drone);
         }
 
-        private void OnDroneScaleBegin(Drone drone, BaseEntity rootEntity, float scale, float previousScale)
-        {
-            if (scale == 0)
-                return;
-
-            SphereEntity parentSphere;
-            var searchLight = GetDroneSearchLight(drone, out parentSphere);
-            if (searchLight == null)
-                return;
-
-            var sphereTransform = parentSphere.transform;
-            if (sphereTransform.localPosition == SphereEntityLocalPosition)
-                return;
-
-            sphereTransform.localPosition = SphereEntityInitialLocalPosition / scale;
-        }
-
         #endregion
 
         #region Classes
 
-        private class SearchLightUpdater : EntityComponent<BasePlayer>
+        private class SearchLightUpdater : FacepunchBehaviour
         {
-            public static void StartControl(BasePlayer player, SearchLight searchLight) =>
-                player.GetOrAddComponent<SearchLightUpdater>().OnControlStarted(searchLight);
-
-            public static void StopControl(BasePlayer player) =>
-                player.GetComponent<SearchLightUpdater>()?.OnControlStopped();
-
-            private SearchLight _searchLight;
-            private Transform _searchLightTransform;
-
-            private void OnControlStarted(SearchLight searchLight)
+            public static void AddOrUpdateForDrone(DroneLights plugin, Drone drone, SphereEntity sphereEntity, SearchLight searchLight)
             {
-                CancelInvoke(DelayedDestroy);
+                var component = GetForDrone(drone);
+                if (component == null)
+                {
+                    component = drone.gameObject.AddComponent<SearchLightUpdater>();
+                    component._plugin = plugin;
+                    component._drone = drone;
+                    component._sphereEntity = sphereEntity;
+                    component._sphereTransform = sphereEntity.transform;
+                    component._searchLight = searchLight;
+                }
 
-                _searchLight = searchLight;
-                _searchLightTransform = searchLight.transform;
+                component.enabled = true;
             }
 
-            private void DelayedDestroy() => DestroyImmediate(this);
+            public static void RemoveFromDrone(Drone drone)
+            {
+                DestroyImmediate(GetForDrone(drone));
+            }
 
-            private void OnControlStopped() => Invoke(DelayedDestroy, 0);
+            private static SearchLightUpdater GetForDrone(Drone drone)
+            {
+                return drone.gameObject.GetComponent<SearchLightUpdater>();
+            }
+
+            private DroneLights _plugin;
+            private Drone _drone;
+            private SphereEntity _sphereEntity;
+            private Transform _sphereTransform;
+            private SearchLight _searchLight;
 
             private void Update()
             {
-                if (_searchLight == null)
+                var controllerSteamId = _drone.ControllingViewerId?.SteamId ?? 0;
+                if (controllerSteamId == 0)
                 {
-                    OnControlStopped();
+                    enabled = false;
                     return;
                 }
+
+                if (_drone.isGrounded)
+                    return;
 
                 if (!_searchLight.IsPowered())
                     return;
 
-                var mouseVerticalDelta = baseEntity.serverInput.current.mouseDelta.y;
-                if (mouseVerticalDelta == 0)
-                    return;
-
-                // Track the performance cost with Oxide so that server owners can be informed.
-                _pluginInstance.TrackStart();
-                UpdateAim(mouseVerticalDelta);
-                _pluginInstance.TrackEnd();
-            }
-
-            private void UpdateAim(float mouseVerticalDelta)
-            {
-                var localX = _searchLightTransform.localRotation.eulerAngles.x;
-                var searchLightSettings = _pluginConfig.SearchLight;
-
-                // Temporarily translate the angle by 90 degrees so it can be clamped based on a configured 0-180 range.
-                var newLocalX = (localX + 90) % 360;
-                newLocalX += searchLightSettings.AimSensitivity * mouseVerticalDelta * Time.deltaTime * 60;
-                newLocalX = Clamp(newLocalX, searchLightSettings.MinAngle, searchLightSettings.MaxAngle);
-                newLocalX = (newLocalX - 90) % 360;
-
-                _searchLightTransform.localRotation = Quaternion.Euler(newLocalX, SearchLightYAxisRotation, 0);
-                _searchLight.InvalidateNetworkCache();
-
-                // This is the most expensive line in terms of performance.
-                _searchLight.SendNetworkUpdate_Position();
+                _plugin.TrackStart();
+                SetLightAngle(_drone, _sphereEntity, _sphereTransform);
+                _plugin.TrackEnd();
             }
         }
 
@@ -379,7 +406,8 @@ namespace Oxide.Plugins
 
         #region Configuration
 
-        private class Configuration : SerializableConfiguration
+        [JsonObject(MemberSerialization.OptIn)]
+        private class Configuration : BaseConfiguration
         {
             [JsonProperty("SearchLight")]
             public SearchLightSettings SearchLight = new SearchLightSettings();
@@ -389,26 +417,16 @@ namespace Oxide.Plugins
         {
             [JsonProperty("DefaultAngle")]
             public int DefaultAngle = 75;
-
-            [JsonProperty("MinAngle")]
-            public int MinAngle = 60;
-
-            [JsonProperty("MaxAngle")]
-            public int MaxAngle = 120;
-
-            [JsonProperty("AimSensitivity")]
-            public float AimSensitivity = 1;
         }
 
         private Configuration GetDefaultConfig() => new Configuration();
 
-        #endregion
+        #region Configuration Helpers
 
-        #region Configuration Boilerplate
-
-        private class SerializableConfiguration
+        [JsonObject(MemberSerialization.OptIn)]
+        private class BaseConfiguration
         {
-            public string ToJson() => JsonConvert.SerializeObject(this);
+            private string ToJson() => JsonConvert.SerializeObject(this);
 
             public Dictionary<string, object> ToDictionary() => JsonHelper.Deserialize(ToJson()) as Dictionary<string, object>;
         }
@@ -435,16 +453,16 @@ namespace Oxide.Plugins
             }
         }
 
-        private bool MaybeUpdateConfig(SerializableConfiguration config)
+        private bool MaybeUpdateConfig(BaseConfiguration config)
         {
             var currentWithDefaults = config.ToDictionary();
             var currentRaw = Config.ToDictionary(x => x.Key, x => x.Value);
-            return MaybeUpdateConfigDict(currentWithDefaults, currentRaw);
+            return MaybeUpdateConfigSection(currentWithDefaults, currentRaw);
         }
 
-        private bool MaybeUpdateConfigDict(Dictionary<string, object> currentWithDefaults, Dictionary<string, object> currentRaw)
+        private bool MaybeUpdateConfigSection(Dictionary<string, object> currentWithDefaults, Dictionary<string, object> currentRaw)
         {
-            bool changed = false;
+            var changed = false;
 
             foreach (var key in currentWithDefaults.Keys)
             {
@@ -461,7 +479,7 @@ namespace Oxide.Plugins
                             currentRaw[key] = currentWithDefaults[key];
                             changed = true;
                         }
-                        else if (MaybeUpdateConfigDict(defaultDictValue, currentDictValue))
+                        else if (MaybeUpdateConfigSection(defaultDictValue, currentDictValue))
                             changed = true;
                     }
                 }
@@ -475,20 +493,21 @@ namespace Oxide.Plugins
             return changed;
         }
 
-        protected override void LoadDefaultConfig() => _pluginConfig = GetDefaultConfig();
+        protected override void LoadDefaultConfig() => _config = GetDefaultConfig();
 
         protected override void LoadConfig()
         {
+
             base.LoadConfig();
             try
             {
-                _pluginConfig = Config.ReadObject<Configuration>();
-                if (_pluginConfig == null)
+                _config = Config.ReadObject<Configuration>();
+                if (_config == null)
                 {
                     throw new JsonException();
                 }
 
-                if (MaybeUpdateConfig(_pluginConfig))
+                if (MaybeUpdateConfig(_config))
                 {
                     LogWarning("Configuration appears to be outdated; updating and saving");
                     SaveConfig();
@@ -504,9 +523,11 @@ namespace Oxide.Plugins
 
         protected override void SaveConfig()
         {
-            Log($"Configuration changes saved to {Name}.json");
-            Config.WriteObject(_pluginConfig, true);
+            Puts($"Configuration changes saved to {Name}.json");
+            Config.WriteObject(_config, true);
         }
+
+        #endregion
 
         #endregion
     }

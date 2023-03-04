@@ -4,10 +4,6 @@
 - Allows remotely toggling the light on and off with the standard key bind
 - Allows remotely aiming the light with mouse movements (requires permission)
 
-## Known issues
-
-Since the March 2023 Rust update, the Drone camera can now be pitched up and down, which uses the same mouse control as this plugin uses to pitch the search light up and down. This may be resolved in a future update to this plugin.
-
 ## Installation
 
 1. Add the plugin to the `oxide/plugins` directory of your Rust server installation
@@ -30,10 +26,7 @@ Default configuration:
 ```json
 {
   "SearchLight": {
-    "DefaultAngle": 75,
-    "MinAngle": 60,
-    "MaxAngle": 120,
-    "AimSensitivity": 1.0
+    "DefaultAngle": 75
   }
 }
 ```
@@ -43,9 +36,6 @@ Default configuration:
     - `0` = Down
     - `90` = Forward
     - `180` = Up
-  - `MinAngle` (`0` - `180`) -- Min angle that players are allowed to aim the search light.
-  - `MaxAngle` (`0` - `180`) -- Max angle that players are allowed to aim the search light.
-  - `AimSensitivity` -- Mouse sensitivity when aiming the search light.
 
 ## FAQ
 
@@ -80,7 +70,7 @@ Drone attachments:
 - Returning `null` will result in the default behavior
 
 ```csharp
-bool? OnDroneSearchLightDeploy(Drone drone)
+object OnDroneSearchLightDeploy(Drone drone)
 ```
 
 #### OnDroneSearchLightDeployed
