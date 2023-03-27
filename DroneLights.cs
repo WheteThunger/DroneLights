@@ -151,7 +151,7 @@ namespace Oxide.Plugins
 
         private static bool IsDroneEligible(Drone drone)
         {
-            return !(drone is DeliveryDrone);
+            return drone.skinID == 0 && !(drone is DeliveryDrone);
         }
 
         private static Drone GetControlledDrone(ComputerStation station)
