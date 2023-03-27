@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Drone Lights", "WhiteThunder", "2.0.0")]
+    [Info("Drone Lights", "WhiteThunder", "2.0.1")]
     [Description("Adds controllable search lights to RC drones.")]
     internal class DroneLights : CovalencePlugin
     {
@@ -95,7 +95,14 @@ namespace Oxide.Plugins
             if (!IsDroneEligible(drone))
                 return;
 
-            MaybeAutoDeploySearchLight(drone);
+            var drone2 = drone;
+            NextTick(() =>
+            {
+                if (drone2 == null || drone2.IsDestroyed)
+                    return;
+
+                MaybeAutoDeploySearchLight(drone2);
+            });
         }
 
         private object OnServerCommand(ConsoleSystem.Arg arg)
