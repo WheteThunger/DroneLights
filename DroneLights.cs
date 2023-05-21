@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Drone Lights", "WhiteThunder", "2.0.1")]
+    [Info("Drone Lights", "WhiteThunder", "2.0.2")]
     [Description("Adds controllable search lights to RC drones.")]
     internal class DroneLights : CovalencePlugin
     {
@@ -28,8 +28,6 @@ namespace Oxide.Plugins
         private static readonly Vector3 SearchLightLocalPosition = new Vector3(0, -1.25f, -0.25f);
 
         private static readonly FieldInfo DronePitchField = typeof(Drone).GetField("pitch", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-        private readonly object False = false;
 
         private Configuration _config;
         private ProtectionProperties _immortalProtection;
@@ -105,25 +103,6 @@ namespace Oxide.Plugins
             });
         }
 
-        private object OnServerCommand(ConsoleSystem.Arg arg)
-        {
-            if (arg.Connection == null || arg.cmd.FullName != "inventory.lighttoggle")
-                return null;
-
-            var basePlayer = arg.Player();
-            if (basePlayer == null)
-                return null;
-
-            var searchLight = GetControlledSearchLight(basePlayer);
-            if (searchLight == null)
-                return null;
-
-            searchLight.SetFlag(IOEntity.Flag_HasPower, !searchLight.IsPowered());
-
-            // Prevent other lights from toggling since they are not useful while using the computer station.
-            return False;
-        }
-
         private void OnBookmarkControlStarted(ComputerStation station, BasePlayer player, string bookmarkName, Drone drone)
         {
             var controllerSteamId = drone.ControllingViewerId?.SteamId;
@@ -135,15 +114,14 @@ namespace Oxide.Plugins
             if (searchLight == null)
                 return;
 
-            if (permission.UserHasPermission(player.UserIDString, PermissionMoveLight))
-            {
-                SearchLightUpdater.AddOrUpdateForDrone(this, drone, sphereEntity, searchLight);
-            }
-            else
+            var hasMovePermission = permission.UserHasPermission(player.UserIDString, PermissionMoveLight);
+            if (!hasMovePermission)
             {
                 var defaultAngle = _config.SearchLight.DefaultAngle - 90 % 360;
                 SetLightAngle(drone, sphereEntity, sphereEntity.transform, defaultAngle);
             }
+
+            SearchLightUpdater.AddOrUpdateForDrone(this, drone, sphereEntity, searchLight, player, hasMovePermission);
         }
 
         #endregion
@@ -356,7 +334,7 @@ namespace Oxide.Plugins
 
         private class SearchLightUpdater : FacepunchBehaviour
         {
-            public static void AddOrUpdateForDrone(DroneLights plugin, Drone drone, SphereEntity sphereEntity, SearchLight searchLight)
+            public static void AddOrUpdateForDrone(DroneLights plugin, Drone drone, SphereEntity sphereEntity, SearchLight searchLight, BasePlayer controller, bool canMove)
             {
                 var component = GetForDrone(drone);
                 if (component == null)
@@ -369,6 +347,8 @@ namespace Oxide.Plugins
                     component._searchLight = searchLight;
                 }
 
+                component._controller = controller;
+                component._canMove = canMove;
                 component.enabled = true;
             }
 
@@ -387,6 +367,8 @@ namespace Oxide.Plugins
             private SphereEntity _sphereEntity;
             private Transform _sphereTransform;
             private SearchLight _searchLight;
+            private BasePlayer _controller;
+            private bool _canMove;
 
             private void Update()
             {
@@ -397,14 +379,18 @@ namespace Oxide.Plugins
                     return;
                 }
 
-                if (_drone.isGrounded)
-                    return;
-
-                if (!_searchLight.IsPowered())
-                    return;
-
                 _plugin.TrackStart();
-                SetLightAngle(_drone, _sphereEntity, _sphereTransform);
+
+                if (_controller.lastTickTime == Time.time && _controller.serverInput.WasJustPressed(BUTTON.FIRE_SECONDARY))
+                {
+                    _searchLight.SetFlag(IOEntity.Flag_HasPower, !_searchLight.IsPowered());
+                }
+
+                if (_canMove && !_drone.isGrounded && _searchLight.IsPowered())
+                {
+                    SetLightAngle(_drone, _sphereEntity, _sphereTransform);
+                }
+
                 _plugin.TrackEnd();
             }
         }

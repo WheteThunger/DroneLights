@@ -41,7 +41,7 @@ Default configuration:
 
 #### How do I toggle the light on and off?
 
-Drone lights use the same command (or key bind) for toggling nightvision, flashlights and vehicle lights. The client-side console command for this is `lighttoggle`, which is bound to the `f` key by default. You can rebind it using the F1 client console or by using the in-game options menu.
+Press your **secondary fire** button. Previously, the plugin was able to detect the vanilla action for toggling lights, but a Rust update made it so that command is no longer sent to the server while the player is mounted to a computer station, so that can no longer be detected.
 
 ## Recommended compatible plugins
 
